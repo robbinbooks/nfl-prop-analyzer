@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NFL Prop Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,600;0,700;1,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=20261121g">
+</head>
+<body>
+  <div class="shell">
+  <nav class="rail" aria-label="Sections">
+    <p class="rail-brand">NFL</p>
+    <button type="button" class="rail-tab" data-view="props" aria-pressed="true">Prop Analyzer</button>
+    <button type="button" class="rail-tab" data-view="money" aria-pressed="false">Smart Money</button>
+  </nav>
+  <div class="shell-main">
+  <div class="app" id="view-props">
+    <header class="top">
+      <p class="eyebrow">NFL · Week <span id="week">—</span></p>
+      <h1>Prop Analyzer</h1>
+      <p class="lede" id="lede">Loading this week’s slate…</p>
+    </header>
+
+    <div class="layout">
+      <section class="board" aria-label="Prop board">
+        <div class="toolbar">
+          <div class="markets" id="markets" role="tablist" aria-label="Prop market"></div>
+          <label class="search">
+            <span class="sr">Search players</span>
+            <input id="search" type="search" placeholder="Search a player" autocomplete="off">
+          </label>
+        </div>
+
+        <div class="panel">
+          <div class="panel-top">
+            <span class="panel-label">Analyze props</span>
+            <div class="sort" role="group" aria-label="Sort board">
+              <button type="button" id="sort-hit" aria-pressed="true">Hit %</button>
+              <button type="button" id="sort-streak" aria-pressed="false">Streak</button>
+              <button type="button" id="sort-match" aria-pressed="false">Matchup</button>
+              <button type="button" id="sort-dir" aria-pressed="false" aria-label="Sort descending">Desc</button>
+            </div>
+          </div>
+          <div class="filters">
+            <div class="side" id="streak-side" role="group" aria-label="Streak direction">
+              <button type="button" data-side="over" aria-pressed="true">Over</button>
+              <button type="button" data-side="under" aria-pressed="false">Under</button>
+            </div>
+            <div class="streak-filter" id="streak-min" role="group" aria-label="Minimum streak">
+              <button type="button" data-min="0" aria-pressed="true">Any</button>
+              <button type="button" data-min="1" aria-pressed="false">1+</button>
+              <button type="button" data-min="2" aria-pressed="false">2+</button>
+              <button type="button" data-min="3" aria-pressed="false">3+</button>
+              <button type="button" data-min="4" aria-pressed="false">4+</button>
+              <button type="button" data-min="5" aria-pressed="false">5+</button>
+            </div>
+          </div>
+          <div class="cols" aria-hidden="true">
+            <span>Player</span>
+            <span>Last 10</span>
+            <span>Hit rate</span>
+            <span>Streak</span>
+            <span>Matchup</span>
+          </div>
+          <div id="list" class="list"></div>
+        </div>
+      </section>
+
+      <aside class="detail" id="detail" aria-live="polite"></aside>
+    </div>
+
+    <p class="note" id="note"></p>
+  </div>
+  <div class="app view-money" id="view-money" hidden>
+    <header class="top">
+      <p class="eyebrow">NFL · Week <span id="money-week">—</span></p>
+      <h1>Smart Money</h1>
+      <p class="lede" id="money-lede">Loading this week’s games…</p>
+    </header>
+    <div id="money-list" class="money-list"></div>
+    <p class="note" id="money-note"></p>
+  </div>
+  </div>
+  </div>
+  <script src="app.js?v=20261120d"></script>
+  <script src="smart.js?v=20261121f"></script>
+</body>
+</html>
