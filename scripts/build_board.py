@@ -348,6 +348,32 @@ def fmt_num(value: float) -> str:
     return f"{value:.1f}"
 
 
+def active_roster(roster: list[dict], week: int) -> dict[str, dict]:
+    """Active players for the slate.
+
+    nflverse keeps a full roster on the latest week only. Earlier weeks shrink
+    to a handful of cuts and trades, which would wipe the board on Monday.
+    """
+    by_week: dict[str, dict[str, dict]] = defaultdict(dict)
+    for row in roster:
+        if row.get("status") != "ACT" or not row.get("gsis_id"):
+            continue
+        by_week[row.get("week") or ""].setdefault(row["gsis_id"], row)
+    preferred = by_week.get(str(week), {})
+    if len(preferred) >= 400:
+        return preferred
+    full = [
+        (int(key), rows)
+        for key, rows in by_week.items()
+        if key.isdigit() and len(rows) >= 400
+    ]
+    if not full:
+        return preferred
+    chosen_week, rows = max(full)
+    print(f"roster week {chosen_week} active players {len(rows)} for week {week} slate")
+    return rows
+
+
 def show_team(code: str) -> str:
     return "LAR" if code == "LA" else code
 
@@ -387,13 +413,7 @@ def main() -> None:
         games_played[game["home_team"]] += 1
         games_played[game["away_team"]] += 1
 
-    roster_now = {}
-    for row in roster:
-        if row.get("week") != str(current_week) or row.get("status") != "ACT":
-            continue
-        if not row.get("gsis_id"):
-            continue
-        roster_now[row["gsis_id"]] = row
+    roster_now = active_roster(roster, current_week)
 
     outs = current_outs(current_week, roster)
 
