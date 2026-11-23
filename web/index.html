@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,600;0,700;1,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261121g">
+  <link rel="stylesheet" href="styles.css?v=20261123b">
 </head>
 <body>
   <div class="shell">
@@ -28,6 +28,12 @@
       <section class="board" aria-label="Prop board">
         <div class="toolbar">
           <div class="markets" id="markets" role="tablist" aria-label="Prop market"></div>
+          <label class="matchup">
+            <span class="sr">Select matchup</span>
+            <select id="matchup" aria-label="Select matchup">
+              <option value="">All matchups</option>
+            </select>
+          </label>
           <label class="search">
             <span class="sr">Search players</span>
             <input id="search" type="search" placeholder="Search a player" autocomplete="off">
@@ -85,7 +91,7 @@
   </div>
   </div>
   </div>
-  <script src="app.js?v=20261120d"></script>
+  <script src="app.js?v=20261123b"></script>
   <script src="smart.js?v=20261121f"></script>
 </body>
 </html>

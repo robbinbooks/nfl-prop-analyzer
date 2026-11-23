@@ -6,6 +6,7 @@ const state = {
   streakSide: "over",
   streakMin: 0,
   query: "",
+  matchup: "",
   selectedId: null,
   lines: new Map(),
 };
@@ -37,6 +38,22 @@ function lineFor(player) {
 function setLine(player, next) {
   const line = Math.max(0.5, Math.round(next * 2) / 2);
   state.lines.set(`${player.id}:${state.marketId}`, line);
+}
+
+function lineRange(book, line) {
+  const posted = book.sportsbook ? Number(book.sportsbook.line) : line;
+  const peak = book.logs.reduce((max, game) => Math.max(max, Number(game.value) || 0), 0);
+  const top = Math.max(peak, posted, line);
+  return { min: 0.5, max: Math.max(Math.ceil((top + 25) * 2) / 2, line) };
+}
+
+function lineMeta(book, line) {
+  const source = onBookLine(book, line)
+    ? `${book.sportsbook.label} ${book.sportsbook.odds}`
+    : book.sportsbook
+      ? `Moved off the ${book.sportsbook.label} ${book.sportsbook.line.toFixed(1)}`
+      : "Season average";
+  return `${source} · avg ${book.seasonAvg}`;
 }
 
 function formatLine(line, unit) {
@@ -120,6 +137,29 @@ function spot(player) {
   return player.home ? `vs ${player.opponent}` : `@ ${player.opponent}`;
 }
 
+function gameId(player) {
+  const home = player.home ? player.team : player.opponent;
+  const away = player.home ? player.opponent : player.team;
+  return `${away}@${home}`;
+}
+
+function matchups() {
+  const names = new Map();
+  for (const player of state.board.players) {
+    if (player.club) names.set(player.team, player.club);
+  }
+  const games = new Map();
+  for (const player of state.board.players) {
+    const id = gameId(player);
+    if (games.has(id)) continue;
+    const [away, home] = id.split("@");
+    const awayName = names.get(away) || away;
+    const homeName = names.get(home) || home;
+    games.set(id, { id, label: `${awayName} @ ${homeName}` });
+  }
+  return [...games.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
 function onBookLine(book, line) {
   const posted = book.sportsbook;
   return Boolean(posted) && Math.abs(posted.line - line) < 0.01;
@@ -134,6 +174,7 @@ function rows() {
   const market = marketById(state.marketId);
   return state.board.players
     .filter((player) => player.markets[state.marketId])
+    .filter((player) => !state.matchup || gameId(player) === state.matchup)
     .filter((player) => {
       if (!query) return true;
       const hay = `${player.name} ${player.team} ${player.club || ""}`.toLowerCase();
@@ -183,6 +224,10 @@ function renderBoard() {
 
   if (!items.length) {
     const bits = [];
+    if (state.matchup) {
+      const game = matchups().find((item) => item.id === state.matchup);
+      if (game) bits.push(esc(game.label));
+    }
     if (state.query.trim()) bits.push(`“${esc(state.query.trim())}”`);
     if (state.streakMin) bits.push(`a ${state.streakMin}+ ${state.streakSide} streak`);
     const why = bits.length ? ` matching ${bits.join(" and ")}` : "";
@@ -227,6 +272,7 @@ function renderDetail(item) {
   }
   const { player, book, line, grade: result, streak, market } = item;
   const season = grade(book.logs, line);
+  const range = lineRange(book, line);
   const sideWord = state.streakSide === "over" ? "Over" : "Under";
   const streakGames = streak.games.map((game) => {
     const where = game.home ? "vs" : "@";
@@ -234,19 +280,7 @@ function renderDetail(item) {
   }).join("");
   const matchTone = tone(book.matchup.score);
   const snapNote = snapSentence(market.id) ? ` ${snapSentence(market.id)}` : "";
-  const recent = book.logs.slice(-10).reverse();
-  const logRows = recent.map((game, index) => {
-    const dot = result.dots[result.dots.length - 1 - index];
-    const label = dot === "hit" ? "Over" : dot === "miss" ? "Under" : "Push";
-    const where = game.home ? "vs" : "@";
-    const shown = Number.isInteger(game.value) ? game.value : game.value.toFixed(1);
-    return `<tr>
-      <td>Wk ${game.week}</td>
-      <td>${where} ${esc(game.opp)}</td>
-      <td>${shown}</td>
-      <td><span class="tag ${dot}">${label}</span></td>
-    </tr>`;
-  }).join("");
+  const logRows = logMarkup(book.logs, result.dots);
 
   detailEl.innerHTML = `
     <p class="detail-kicker">Week ${state.board.week} · ${esc(market.label)}</p>
@@ -259,22 +293,19 @@ function renderDetail(item) {
       </div>
     </div>
     <div class="line-row">
-      <div class="stepper" aria-label="Prop line">
-        <button type="button" id="line-down" aria-label="Lower line">−</button>
-        <b>${esc(formatLine(line, market.unit))}</b>
-        <button type="button" id="line-up" aria-label="Raise line">+</button>
+      <div class="line-scroll">
+        <div class="line-readout">
+          <b id="line-value">${esc(formatLine(line, market.unit))}</b>
+          <span class="meta" id="line-meta">${esc(lineMeta(book, line))}</span>
+        </div>
+        <input id="line-slider" class="line-slider" type="range" min="${range.min}" max="${range.max}" step="0.5" value="${line}" aria-label="Scroll the prop line">
       </div>
-      <span class="meta">${onBookLine(book, line)
-        ? `${esc(book.sportsbook.label)} ${esc(book.sportsbook.odds)}`
-        : book.sportsbook
-          ? `Moved off the ${esc(book.sportsbook.label)} ${book.sportsbook.line.toFixed(1)}`
-          : "Season average"} · avg ${book.seasonAvg}</span>
     </div>
     <div class="stat-pair">
       <div class="stat">
         <span>Hit rate</span>
-        <strong class="${tone(result.pct)}">${result.pct}%</strong>
-        <em>${result.hits} of last ${result.dots.length} cleared ${esc(formatLine(line, market.unit))}</em>
+        <strong id="hit-rate" class="${tone(result.pct)}">${result.pct}%</strong>
+        <em id="hit-note">${result.hits} of last ${result.dots.length} cleared ${esc(formatLine(line, market.unit))}</em>
       </div>
       <div class="stat">
         <span>Matchup</span>
@@ -282,31 +313,102 @@ function renderDetail(item) {
         <em>${book.matchup.rank ? `${book.matchup.rank} of ${book.matchup.teams} defenses` : "No defensive split"}</em>
       </div>
     </div>
-    <p class="blurb">${esc(book.matchup.blurb)} Season hit rate at this line is ${season.pct}% across ${book.games} games.</p>
+    <p class="blurb" id="line-blurb">${esc(book.matchup.blurb)} Season hit rate at this line is ${season.pct}% across ${book.games} games.</p>
     <section class="streak-card">
       <div class="streak-head">
         <span>${sideWord} streak</span>
-        <strong class="streak ${streakClass(streak.count)}">${streakMark(streak.count)}</strong>
+        <strong id="streak-mark" class="streak ${streakClass(streak.count)}">${streakMark(streak.count)}</strong>
       </div>
-      <p>Current line: ${esc(formatLine(line, market.unit))}</p>
-      ${streak.games.length
-        ? `<ol class="streak-games">${streakGames}</ol>`
-        : `<p class="streak-empty">No ${sideWord.toLowerCase()} streak at this line.</p>`}
+      <p id="streak-line">Current line: ${esc(formatLine(line, market.unit))}</p>
+      <div id="streak-body">
+        ${streak.games.length
+          ? `<ol class="streak-games">${streakGames}</ol>`
+          : `<p class="streak-empty">No ${sideWord.toLowerCase()} streak at this line.</p>`}
+      </div>
       <p class="streak-note">All games are evaluated against the current line. An exact result ends the streak. Games the player did not play are skipped.${snapNote} Hit rate is a separate count.</p>
     </section>
     <table class="log">
       <thead><tr><th>Week</th><th>Opp</th><th>Stat</th><th>Result</th></tr></thead>
-      <tbody>${logRows}</tbody>
+      <tbody id="log-body">${logRows}</tbody>
     </table>`;
 
-  document.querySelector("#line-down").addEventListener("click", () => {
-    setLine(player, line - 0.5);
-    renderBoard();
-  });
-  document.querySelector("#line-up").addEventListener("click", () => {
-    setLine(player, line + 0.5);
-    renderBoard();
-  });
+  bindLineSlider(player);
+}
+
+function logMarkup(logs, dots) {
+  return logs.slice(-10).reverse().map((game, index) => {
+    const dot = dots[dots.length - 1 - index];
+    const label = dot === "hit" ? "Over" : dot === "miss" ? "Under" : "Push";
+    const where = game.home ? "vs" : "@";
+    const shown = Number.isInteger(game.value) ? game.value : game.value.toFixed(1);
+    return `<tr>
+      <td>Wk ${game.week}</td>
+      <td>${where} ${esc(game.opp)}</td>
+      <td>${shown}</td>
+      <td><span class="tag ${dot}">${label}</span></td>
+    </tr>`;
+  }).join("");
+}
+
+function paintLine(player) {
+  const item = rows().find((row) => row.player.id === player.id);
+  if (!item) return;
+  const { book, line, grade: result, streak, market } = item;
+  const season = grade(book.logs, line);
+  const sideWord = state.streakSide === "over" ? "Over" : "Under";
+  document.querySelector("#line-value").textContent = formatLine(line, market.unit);
+  document.querySelector("#line-meta").textContent = lineMeta(book, line);
+  const hit = document.querySelector("#hit-rate");
+  hit.textContent = `${result.pct}%`;
+  hit.className = tone(result.pct);
+  document.querySelector("#hit-note").textContent = `${result.hits} of last ${result.dots.length} cleared ${formatLine(line, market.unit)}`;
+  document.querySelector("#line-blurb").textContent = `${book.matchup.blurb} Season hit rate at this line is ${season.pct}% across ${book.games} games.`;
+  const mark = document.querySelector("#streak-mark");
+  mark.textContent = streakMark(streak.count);
+  mark.className = `streak ${streakClass(streak.count)}`;
+  document.querySelector("#streak-line").textContent = `Current line: ${formatLine(line, market.unit)}`;
+  const games = streak.games.map((game) => {
+    const where = game.home ? "vs" : "@";
+    return `<li>Week ${game.week}: ${formatStat(game.value)} ${where} ${esc(game.opp)} ✓</li>`;
+  }).join("");
+  document.querySelector("#streak-body").innerHTML = streak.games.length
+    ? `<ol class="streak-games">${games}</ol>`
+    : `<p class="streak-empty">No ${sideWord.toLowerCase()} streak at this line.</p>`;
+  document.querySelector("#log-body").innerHTML = logMarkup(book.logs, result.dots);
+
+  const row = listEl.querySelector(`[data-id="${CSS.escape(player.id)}"]`);
+  if (!row) return;
+  row.querySelector(".who .meta").textContent = `${formatLine(line, market.unit)}${priceTag(book, line)} · ${spot(player)}`;
+  const pct = row.querySelector(".pct");
+  pct.textContent = `${result.pct}%`;
+  pct.className = `pct ${tone(result.pct)}`;
+  const streakEl = row.querySelector(":scope > .streak");
+  streakEl.textContent = streakMark(streak.count);
+  streakEl.className = `streak ${streakClass(streak.count)}`;
+  streakEl.title = streakText(streak, line, market);
+  const shownDots = Array(Math.max(0, 10 - result.dots.length)).fill("empty").concat(result.dots);
+  row.querySelector(".dots").innerHTML = shownDots.map((dot) => `<i class="dot ${dot}"></i>`).join("");
+}
+
+function bindLineSlider(player) {
+  const slider = document.querySelector("#line-slider");
+  const scroller = document.querySelector(".line-scroll");
+  const move = (next, rebuild) => {
+    setLine(player, next);
+    const value = lineFor(player);
+    if (value > Number(slider.max)) slider.max = String(value);
+    slider.value = String(value);
+    paintLine(player);
+    if (rebuild) renderBoard();
+  };
+  slider.addEventListener("input", () => move(Number(slider.value), false));
+  slider.addEventListener("change", () => renderBoard());
+  scroller.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    const notches = Math.max(1, Math.round(Math.abs(event.deltaY) / 24));
+    move(lineFor(player) + direction * notches * 0.5, true);
+  }, { passive: false });
 }
 
 function renderChrome() {
@@ -324,6 +426,11 @@ function renderChrome() {
   document.querySelector("#note").textContent = posted
     ? `${board.lines.matched} props use the ${board.lines.label} number. A card with no price is still on the season average because that book has no line. Move a line and the price drops off. Hit rate and streak both update, and they stay separate. Stats through week ${board.throughWeek}. This is a research view, not a sportsbook.`
     : `Lines start at the season average, snapped to a half point, until a SportsGameOdds key is added. Move the line and the hit rate and streak update separately. Stats through week ${board.throughWeek}. Source: ${board.source}. This is a research view, not a sportsbook.`;
+
+  const matchup = document.querySelector("#matchup");
+  const selected = state.matchup;
+  matchup.innerHTML = `<option value="">All matchups</option>${matchups().map((game) => `
+    <option value="${esc(game.id)}"${game.id === selected ? " selected" : ""}>${esc(game.label)}</option>`).join("")}`;
 
   marketsEl.innerHTML = board.markets.map((market) => `
     <button type="button" role="tab" aria-selected="${market.id === state.marketId}" data-market="${market.id}">
@@ -344,6 +451,11 @@ function bind() {
 
   document.querySelector("#search").addEventListener("input", (event) => {
     state.query = event.target.value;
+    renderBoard();
+  });
+
+  document.querySelector("#matchup").addEventListener("change", (event) => {
+    state.matchup = event.target.value;
     renderBoard();
   });
 

@@ -113,6 +113,18 @@ h1 {
   border-color: rgba(125, 211, 252, 0.45);
 }
 
+.matchup select {
+  border: 1px solid var(--line);
+  background: rgba(8, 16, 30, 0.7);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 14px;
+  outline: none;
+  max-width: 240px;
+}
+
+.matchup select:focus { border-color: rgba(125, 211, 252, 0.6); }
+
 .search input {
   width: 190px;
   border: 1px solid var(--line);
@@ -524,33 +536,26 @@ h1 {
   font-size: 12px;
 }
 
-.line-row {
+.line-row { margin: 14px 0; }
+
+.line-readout {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin: 14px 0;
 }
 
-.stepper {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.line-readout b {
+  font-size: 22px;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
 }
 
-.stepper button {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: #102033;
-  font-size: 18px;
-}
-
-.stepper b {
-  min-width: 92px;
-  text-align: center;
-  font-size: 16px;
+.line-slider {
+  width: 100%;
+  margin: 12px 0 0;
+  accent-color: #7dd3fc;
+  cursor: grab;
 }
 
 .blurb {
@@ -627,7 +632,7 @@ h1 {
 @media (max-width: 720px) {
   .app { width: min(100% - 20px, 1180px); }
   .toolbar { flex-direction: column; align-items: stretch; }
-  .search input { width: 100%; }
+  .search input, .matchup select { width: 100%; max-width: none; }
   h1 { font-size: 28px; }
 }
 
