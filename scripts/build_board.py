@@ -28,6 +28,7 @@ SOURCES = {
     "roster_2026.csv": "https://github.com/nflverse/nflverse-data/releases/download/rosters/roster_2026.csv",
     "stats_player_week_2026.csv": "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.csv",
     "snap_counts_2026.csv": "https://github.com/nflverse/nflverse-data/releases/download/snap_counts/snap_counts_2026.csv",
+    "play_by_play_2026.csv": "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_2026.csv",
 }
 
 NICKNAMES = {
@@ -138,6 +139,20 @@ MARKETS = [
         "min_volume": 15,
         "min_games": 4,
         "group": "position",
+    },
+    {
+        "id": "first_td",
+        "label": "First TD",
+        "unit": "TD",
+        "stat_label": "first touchdowns",
+        "positions": {"QB", "RB", "WR", "TE", "FB"},
+        "value": lambda r: 0,
+        "played": lambda r: False,
+        "volume": lambda r: 0,
+        "min_volume": 0,
+        "min_games": 1,
+        "group": "position",
+        "kind": "first_td",
     },
 ]
 
@@ -302,6 +317,92 @@ def offensive_snaps(roster_rows: list[dict]) -> dict[tuple[str, int], dict]:
     return played
 
 
+def td_group(position: str) -> str | None:
+    if position in {"WR", "RB", "TE"}:
+        return position
+    if position == "QB":
+        return "QB"
+    if position == "FB":
+        return "RB"
+    return None
+
+
+def first_touchdowns(current_week: int, roster: list[dict], stats: list[dict], games: list[dict]) -> tuple[dict, dict]:
+    """First touchdown of each played game.
+
+    The scorer is the player credited on the play, including returns and
+    defensive scores. The passer is not the scorer.
+    """
+    position_of: dict[str, str] = {}
+    for row in roster:
+        if row.get("gsis_id") and row.get("position"):
+            position_of[row["gsis_id"]] = row["position"]
+    for row in stats:
+        if row.get("player_id") and row.get("position"):
+            position_of.setdefault(row["player_id"], row["position"])
+
+    opponent: dict[tuple[int, str], str] = {}
+    for game in games:
+        if game.get("game_type") != "REG" or game.get("season") != str(SEASON):
+            continue
+        week = int(game["week"])
+        if week >= current_week:
+            continue
+        home = canon_team(game["home_team"])
+        away = canon_team(game["away_team"])
+        opponent[(week, home)] = away
+        opponent[(week, away)] = home
+
+    earliest: dict[str, tuple] = {}
+    pbp_file = RAW / "play_by_play_2026.csv"
+    if pbp_file.exists():
+        wanted = {"season", "season_type", "week", "game_id", "play_id", "touchdown", "td_player_id", "td_team", "posteam"}
+        with pbp_file.open(newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader)
+            index = {name: i for i, name in enumerate(header) if name in wanted}
+
+            def column(row: list[str], name: str) -> str:
+                slot = index.get(name)
+                if slot is None or slot >= len(row):
+                    return ""
+                return row[slot]
+
+            for row in reader:
+                if column(row, "season") not in ("", str(SEASON)):
+                    continue
+                if column(row, "season_type") not in ("", "REG"):
+                    continue
+                if column(row, "touchdown") not in ("1", "1.0"):
+                    continue
+                player_id = column(row, "td_player_id")
+                if not player_id:
+                    continue
+                try:
+                    week = int(column(row, "week"))
+                    play_id = float(column(row, "play_id") or 0)
+                except ValueError:
+                    continue
+                if week >= current_week or week < 1:
+                    continue
+                game_id = column(row, "game_id")
+                team = canon_team(column(row, "td_team") or column(row, "posteam"))
+                previous = earliest.get(game_id)
+                if previous is None or play_id < previous[0]:
+                    earliest[game_id] = (play_id, week, player_id, team)
+
+    by_player: dict[str, dict[int, dict]] = defaultdict(dict)
+    allowed: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for _play_id, week, player_id, team in earliest.values():
+        opp = opponent.get((week, team), "")
+        by_player[player_id][week] = {"team": team, "opp": opp}
+        group = td_group(position_of.get(player_id, ""))
+        if group and opp:
+            allowed[group][opp] += 1
+    print(f"first touchdowns {len(earliest)}")
+    return by_player, allowed
+
+
 def read_csv(name: str) -> list[dict]:
     with (RAW / name).open(newline="") as handle:
         return list(csv.DictReader(handle))
@@ -431,6 +532,8 @@ def main() -> None:
         defense = row["opponent_team"]
         position = row["position"] or ""
         for market in MARKETS:
+            if market.get("kind") == "first_td":
+                continue
             group = position if market["group"] == "position" else "QB"
             if market["group"] == "position" and position not in market["positions"]:
                 continue
@@ -457,8 +560,27 @@ def main() -> None:
 
     snaps = offensive_snaps(roster)
     print(f"offensive snap games {len(snaps)}")
+    first_by_player, first_allowed = first_touchdowns(current_week, roster, stats, games)
+    for group, totals in first_allowed.items():
+        per_game = {
+            team: total / games_played[team]
+            for team, total in totals.items()
+            if games_played[team]
+        }
+        for team in games_played:
+            per_game.setdefault(team, 0)
+        scores, ranks, count = generosity(per_game)
+        league = sum(per_game.values()) / len(per_game) if per_game else 0
+        matchup_tables[("first_td", group)] = {
+            "scores": scores,
+            "ranks": ranks,
+            "teams": count,
+            "per_game": per_game,
+            "league": league,
+        }
     player_ids = set(by_player)
     player_ids.update(player_id for player_id, _week in snaps if player_id in roster_now)
+    player_ids.update(player_id for player_id in first_by_player if player_id in roster_now)
 
     players = []
     for player_id in player_ids:
@@ -482,34 +604,78 @@ def main() -> None:
                 continue
             logs = []
             volume = 0.0
-            for row in rows:
-                if not market["played"](row):
-                    continue
-                volume += market["volume"](row)
-                logs.append({
-                    "week": int(row["week"]),
-                    "opp": show_team(row["opponent_team"]),
-                    "home": site.get((int(row["week"]), row["team"]), False),
-                    "value": market["value"](row),
-                })
-            snap_positions = market.get("snap_positions", market["positions"])
-            if market.get("count_snaps") and position in snap_positions:
-                # An offensive snap with no production in this stat is a played 0.
-                # Receiving uses targets and yards. Rushing uses carries, for
-                # running backs, quarterbacks, and receivers. A week already logged stays.
-                seen = {entry["week"] for entry in logs}
-                for week in range(1, current_week):
-                    snap = snaps.get((player_id, week))
-                    if not snap or week in seen:
+            if market.get("kind") == "first_td":
+                seen: set[int] = set()
+                if position in market["positions"]:
+                    for row in rows:
+                        week = int(row["week"])
+                        touched = (
+                            num(row, "carries") + num(row, "targets") + num(row, "attempts") > 0
+                            or num(row, "rushing_yards") + num(row, "receiving_yards") > 0
+                        )
+                        if not touched:
+                            continue
+                        seen.add(week)
+                        logs.append({
+                            "week": week,
+                            "opp": show_team(row["opponent_team"]),
+                            "home": site.get((week, row["team"]), False),
+                            "value": 1.0 if week in first_by_player.get(player_id, {}) else 0.0,
+                        })
+                    for week in range(1, current_week):
+                        snap = snaps.get((player_id, week))
+                        if not snap or week in seen:
+                            continue
+                        seen.add(week)
+                        logs.append({
+                            "week": week,
+                            "opp": show_team(snap["opp"]),
+                            "home": site.get((week, snap["team"]), False),
+                            "value": 1.0 if week in first_by_player.get(player_id, {}) else 0.0,
+                        })
+                for week, info in first_by_player.get(player_id, {}).items():
+                    if week in seen:
                         continue
-                    stat = stats_by_week.get(week, {})
                     logs.append({
                         "week": week,
-                        "opp": show_team(snap["opp"]),
-                        "home": site.get((week, snap["team"]), False),
-                        "value": market["value"](stat),
+                        "opp": show_team(info["opp"]),
+                        "home": site.get((week, info["team"]), False),
+                        "value": 1.0,
                     })
                 logs.sort(key=lambda entry: entry["week"])
+                volume = float(len(logs))
+                # First TD is only for offensive players who have scored one.
+                if not any(entry["value"] >= 1 for entry in logs):
+                    continue
+            else:
+                for row in rows:
+                    if not market["played"](row):
+                        continue
+                    volume += market["volume"](row)
+                    logs.append({
+                        "week": int(row["week"]),
+                        "opp": show_team(row["opponent_team"]),
+                        "home": site.get((int(row["week"]), row["team"]), False),
+                        "value": market["value"](row),
+                    })
+                snap_positions = market.get("snap_positions", market["positions"])
+                if market.get("count_snaps") and position in snap_positions:
+                    # An offensive snap with no production in this stat is a played 0.
+                    # Receiving uses targets and yards. Rushing uses carries, for
+                    # running backs, quarterbacks, and receivers. A week already logged stays.
+                    seen = {entry["week"] for entry in logs}
+                    for week in range(1, current_week):
+                        snap = snaps.get((player_id, week))
+                        if not snap or week in seen:
+                            continue
+                        stat = stats_by_week.get(week, {})
+                        logs.append({
+                            "week": week,
+                            "opp": show_team(snap["opp"]),
+                            "home": site.get((week, snap["team"]), False),
+                            "value": market["value"](stat),
+                        })
+                    logs.sort(key=lambda entry: entry["week"])
             # Full sample stays on the board. One played game stays only when the
             # sportsbook has a line, so a new starter is not hidden.
             qualified = len(logs) >= market["min_games"] and volume >= market["min_volume"]
@@ -517,8 +683,13 @@ def main() -> None:
                 continue
             # Home/away for past games is display-only; this week is what the card uses.
             values = [entry["value"] for entry in logs]
-            average = sum(values) / len(values)
-            group = position if market["group"] == "position" else "QB"
+            average = sum(values) / len(values) if values else 0
+            if market.get("kind") == "first_td":
+                group = td_group(position) or position
+            elif market["group"] == "position":
+                group = position
+            else:
+                group = "QB"
             table = matchup_tables.get((market["id"], group), {})
             opponent = game["opp"]
             per_game = table.get("per_game", {}).get(opponent)
@@ -528,6 +699,20 @@ def main() -> None:
             group_label = {"QB": "quarterbacks", "RB": "running backs", "WR": "wide receivers", "TE": "tight ends"}.get(group, "players")
             if per_game is None or rank is None:
                 blurb = f"{NICKNAMES.get(opponent, opponent)} matchup is unavailable for this split."
+            elif market.get("kind") == "first_td":
+                times = int(round(per_game * (games_played.get(opponent) or 0)))
+                played = games_played.get(opponent) or 0
+                if rank <= 10:
+                    place = f"{ordinal(rank)}-most"
+                elif rank >= teams - 9:
+                    place = f"{ordinal(teams - rank + 1)}-fewest"
+                else:
+                    place = f"{ordinal(rank)} of {teams}"
+                noun = "time" if times == 1 else "times"
+                blurb = (
+                    f"{NICKNAMES.get(opponent, opponent)} allowed a {group_label[:-1] if group_label.endswith('s') else group_label} "
+                    f"to score the first touchdown {times} {noun} in {played} games, {place} in the NFL."
+                )
             else:
                 if rank <= 10:
                     place = f"{ordinal(rank)}-most"
@@ -541,7 +726,7 @@ def main() -> None:
                     f"{place} in the NFL."
                 )
             markets_out[market["id"]] = {
-                "line": nearest_half(average),
+                "line": 0.5 if market.get("kind") == "first_td" else nearest_half(average),
                 "seasonAvg": round(average, 2),
                 "qualified": qualified,
                 "games": len(logs),

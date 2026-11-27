@@ -213,6 +213,8 @@ def relevant(odd: dict) -> str | None:
         return OU_STATS[stat]
     if stat == "touchdowns" and odd.get("betTypeID") == "yn" and side == "yes":
         return "anytime_td"
+    if stat == "firstTouchdown" and odd.get("betTypeID") == "yn" and side == "yes":
+        return "first_td"
     return None
 
 
@@ -350,6 +352,9 @@ def _self_test() -> None:
     }
     assert relevant(anytime) == "anytime_td"
     assert quote_for(anytime, "draftkings")["line"] == 0.5
+    first = dict(anytime, statID="firstTouchdown")
+    assert relevant(first) == "first_td"
+    assert quote_for(first, "draftkings")["line"] == 0.5
     assert team_abbr({"names": {"short": "KC", "medium": "Chiefs"}}) == "KC"
     assert team_abbr({"names": {"short": "WSH", "medium": "Commanders"}}) == "WAS"
     print("attach_lines self-test ok")

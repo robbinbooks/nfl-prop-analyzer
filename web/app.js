@@ -8,6 +8,7 @@ const state = {
   query: "",
   matchup: "",
   selectedId: null,
+  sheetOpen: false,
   lines: new Map(),
 };
 
@@ -112,7 +113,36 @@ function snapSentence(marketId) {
   if (marketId === "rush_yds" || marketId === "rush_att") {
     return "An offensive snap with no carry counts as 0 for running backs, quarterbacks, and receivers.";
   }
+  if (marketId === "first_td") {
+    return "Yes means this player scored the first touchdown of that game. An offensive snap with no score counts as No.";
+  }
   return "";
+}
+
+function formatPlayed(value, marketId) {
+  if (marketId === "first_td") return Number(value) >= 1 ? "Yes" : "No";
+  return formatStat(value);
+}
+
+function hitSentence(result, line, market) {
+  if (market.id === "first_td") {
+    return `${result.hits} of last ${result.dots.length} scored the first touchdown`;
+  }
+  return `${result.hits} of last ${result.dots.length} cleared ${formatLine(line, market.unit)}`;
+}
+
+function emptyStreak(market) {
+  if (market.id === "first_td") {
+    return state.streakSide === "over"
+      ? "No streak of scoring the first touchdown."
+      : "No streak without scoring the first touchdown.";
+  }
+  return `No ${sideLabel(market).toLowerCase()} streak at this line.`;
+}
+
+function sideLabel(market) {
+  if (market.id === "first_td") return state.streakSide === "over" ? "Yes" : "No";
+  return state.streakSide === "over" ? "Over" : "Under";
 }
 
 function streakMark(count) {
@@ -120,8 +150,8 @@ function streakMark(count) {
 }
 
 function streakText(streak, line, market) {
-  const word = state.streakSide === "over" ? "Over" : "Under";
-  const games = streak.games.map((game) => `Week ${game.week}: ${formatStat(game.value)} ✓`);
+  const word = sideLabel(market);
+  const games = streak.games.map((game) => `Week ${game.week}: ${formatPlayed(game.value, market.id)} ✓`);
   const lines = [
     `${word} streak ${streak.count}x`,
     `Current line: ${formatLine(line, market.unit)}`,
@@ -218,8 +248,10 @@ function avatar(person, className) {
 function renderBoard() {
   const scroll = listEl.scrollTop;
   const items = rows();
+  const previousId = state.selectedId;
   if (!items.some((item) => item.player.id === state.selectedId)) {
     state.selectedId = items[0]?.player.id ?? null;
+    if (state.selectedId !== previousId) state.sheetOpen = false;
   }
 
   if (!items.length) {
@@ -239,8 +271,7 @@ function renderBoard() {
   listEl.innerHTML = items.map(({ player, line, grade: result, streak, market, book }) => {
     const hitTone = tone(result.pct);
     const matchTone = tone(book.matchup.score);
-    const shownDots = Array(Math.max(0, 10 - result.dots.length)).fill("empty").concat(result.dots);
-    const dots = shownDots.map((dot) => `<i class="dot ${dot}"></i>`).join("");
+    const dots = result.dots.map((dot) => `<i class="dot ${dot}"></i>`).join("");
     const streakTitle = esc(streakText(streak, line, market)).replaceAll("\n", "&#10;");
     return `
       <button type="button" class="row ${player.injury ? "out" : ""} ${player.id === state.selectedId ? "selected" : ""}" data-id="${esc(player.id)}">
@@ -265,25 +296,56 @@ function renderBoard() {
   renderDetail(items.find((item) => item.player.id === state.selectedId));
 }
 
+function mobileLayout() {
+  return window.matchMedia("(max-width: 980px)").matches;
+}
+
+function closeSheet() {
+  state.sheetOpen = false;
+  syncSheet();
+}
+
+function syncSheet() {
+  const open = mobileLayout() && state.sheetOpen && Boolean(state.selectedId);
+  document.body.classList.toggle("player-open", open);
+  const backdrop = document.querySelector("#sheet-backdrop");
+  if (backdrop) backdrop.hidden = !open;
+  detailEl.classList.toggle("is-open", open);
+  if (open) {
+    detailEl.setAttribute("role", "dialog");
+    detailEl.setAttribute("aria-modal", "true");
+    detailEl.setAttribute("aria-label", "Player card");
+  } else {
+    detailEl.removeAttribute("role");
+    detailEl.removeAttribute("aria-modal");
+    detailEl.removeAttribute("aria-label");
+  }
+}
+
 function renderDetail(item) {
   if (!item) {
     detailEl.innerHTML = `<p class="blurb">Pick a player to see the game log and this week’s matchup.</p>`;
+    syncSheet();
     return;
   }
   const { player, book, line, grade: result, streak, market } = item;
   const season = grade(book.logs, line);
   const range = lineRange(book, line);
-  const sideWord = state.streakSide === "over" ? "Over" : "Under";
+  const sideWord = sideLabel(market);
   const streakGames = streak.games.map((game) => {
     const where = game.home ? "vs" : "@";
-    return `<li>Week ${game.week}: ${formatStat(game.value)} ${where} ${esc(game.opp)} ✓</li>`;
+    return `<li>Week ${game.week}: ${formatPlayed(game.value, market.id)} ${where} ${esc(game.opp)} ✓</li>`;
   }).join("");
   const matchTone = tone(book.matchup.score);
   const snapNote = snapSentence(market.id) ? ` ${snapSentence(market.id)}` : "";
-  const logRows = logMarkup(book.logs, result.dots);
+  const logRows = logMarkup(book.logs, result.dots, market.id);
 
   detailEl.innerHTML = `
-    <p class="detail-kicker">Week ${state.board.week} · ${esc(market.label)}</p>
+    <div class="detail-bar">
+      <p class="detail-kicker">Week ${state.board.week} · ${esc(market.label)}</p>
+      <button type="button" class="detail-close" aria-label="Close player card">×</button>
+    </div>
+    <div class="detail-scroll">
     <div class="detail-hero">
       ${avatar(player)}
       <div>
@@ -305,7 +367,7 @@ function renderDetail(item) {
       <div class="stat">
         <span>Hit rate</span>
         <strong id="hit-rate" class="${tone(result.pct)}">${result.pct}%</strong>
-        <em id="hit-note">${result.hits} of last ${result.dots.length} cleared ${esc(formatLine(line, market.unit))}</em>
+        <em id="hit-note">${esc(hitSentence(result, line, market))}</em>
       </div>
       <div class="stat">
         <span>Matchup</span>
@@ -323,24 +385,29 @@ function renderDetail(item) {
       <div id="streak-body">
         ${streak.games.length
           ? `<ol class="streak-games">${streakGames}</ol>`
-          : `<p class="streak-empty">No ${sideWord.toLowerCase()} streak at this line.</p>`}
+          : `<p class="streak-empty">${emptyStreak(market)}</p>`}
       </div>
       <p class="streak-note">All games are evaluated against the current line. An exact result ends the streak. Games the player did not play are skipped.${snapNote} Hit rate is a separate count.</p>
     </section>
     <table class="log">
       <thead><tr><th>Week</th><th>Opp</th><th>Stat</th><th>Result</th></tr></thead>
       <tbody id="log-body">${logRows}</tbody>
-    </table>`;
+    </table>
+    </div>`;
 
+  detailEl.querySelector(".detail-close").addEventListener("click", closeSheet);
   bindLineSlider(player);
+  syncSheet();
 }
 
-function logMarkup(logs, dots) {
+function logMarkup(logs, dots, marketId) {
   return logs.slice(-10).reverse().map((game, index) => {
     const dot = dots[dots.length - 1 - index];
-    const label = dot === "hit" ? "Over" : dot === "miss" ? "Under" : "Push";
+    const label = marketId === "first_td"
+      ? (dot === "hit" ? "Yes" : dot === "miss" ? "No" : "Push")
+      : (dot === "hit" ? "Over" : dot === "miss" ? "Under" : "Push");
     const where = game.home ? "vs" : "@";
-    const shown = Number.isInteger(game.value) ? game.value : game.value.toFixed(1);
+    const shown = formatPlayed(game.value, marketId);
     return `<tr>
       <td>Wk ${game.week}</td>
       <td>${where} ${esc(game.opp)}</td>
@@ -355,13 +422,13 @@ function paintLine(player) {
   if (!item) return;
   const { book, line, grade: result, streak, market } = item;
   const season = grade(book.logs, line);
-  const sideWord = state.streakSide === "over" ? "Over" : "Under";
+  const sideWord = sideLabel(market);
   document.querySelector("#line-value").textContent = formatLine(line, market.unit);
   document.querySelector("#line-meta").textContent = lineMeta(book, line);
   const hit = document.querySelector("#hit-rate");
   hit.textContent = `${result.pct}%`;
   hit.className = tone(result.pct);
-  document.querySelector("#hit-note").textContent = `${result.hits} of last ${result.dots.length} cleared ${formatLine(line, market.unit)}`;
+  document.querySelector("#hit-note").textContent = hitSentence(result, line, market);
   document.querySelector("#line-blurb").textContent = `${book.matchup.blurb} Season hit rate at this line is ${season.pct}% across ${book.games} games.`;
   const mark = document.querySelector("#streak-mark");
   mark.textContent = streakMark(streak.count);
@@ -369,12 +436,12 @@ function paintLine(player) {
   document.querySelector("#streak-line").textContent = `Current line: ${formatLine(line, market.unit)}`;
   const games = streak.games.map((game) => {
     const where = game.home ? "vs" : "@";
-    return `<li>Week ${game.week}: ${formatStat(game.value)} ${where} ${esc(game.opp)} ✓</li>`;
+    return `<li>Week ${game.week}: ${formatPlayed(game.value, market.id)} ${where} ${esc(game.opp)} ✓</li>`;
   }).join("");
   document.querySelector("#streak-body").innerHTML = streak.games.length
     ? `<ol class="streak-games">${games}</ol>`
-    : `<p class="streak-empty">No ${sideWord.toLowerCase()} streak at this line.</p>`;
-  document.querySelector("#log-body").innerHTML = logMarkup(book.logs, result.dots);
+    : `<p class="streak-empty">${emptyStreak(market)}</p>`;
+  document.querySelector("#log-body").innerHTML = logMarkup(book.logs, result.dots, market.id);
 
   const row = listEl.querySelector(`[data-id="${CSS.escape(player.id)}"]`);
   if (!row) return;
@@ -386,8 +453,7 @@ function paintLine(player) {
   streakEl.textContent = streakMark(streak.count);
   streakEl.className = `streak ${streakClass(streak.count)}`;
   streakEl.title = streakText(streak, line, market);
-  const shownDots = Array(Math.max(0, 10 - result.dots.length)).fill("empty").concat(result.dots);
-  row.querySelector(".dots").innerHTML = shownDots.map((dot) => `<i class="dot ${dot}"></i>`).join("");
+  row.querySelector(".dots").innerHTML = result.dots.map((dot) => `<i class="dot ${dot}"></i>`).join("");
 }
 
 function bindLineSlider(player) {
@@ -488,7 +554,19 @@ function bind() {
     const row = event.target.closest("[data-id]");
     if (!row) return;
     state.selectedId = row.dataset.id;
+    state.sheetOpen = true;
     renderBoard();
+    detailEl.querySelector(".detail-scroll")?.scrollTo(0, 0);
+    detailEl.querySelector(".detail-close")?.focus();
+  });
+
+  document.querySelector("#sheet-backdrop").addEventListener("click", closeSheet);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSheet();
+  });
+  window.matchMedia("(max-width: 980px)").addEventListener("change", () => {
+    if (!mobileLayout()) state.sheetOpen = false;
+    syncSheet();
   });
 }
 
